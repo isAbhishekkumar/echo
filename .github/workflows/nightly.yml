@@ -45,32 +45,29 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Build with Gradle (sign if keystore present)
+      - name: Build with Gradle (produce installable APK)
         shell: bash
         run: |
           set -euo pipefail
 
-          # If a base64 keystore secret exists, decode it and build with signing properties.
-          if [ -n "${{ secrets.KEYSTORE_B64 }}" ]; then
-            echo "Decoding keystore from secrets and building with signing..."
-            echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > "$GITHUB_WORKSPACE/signing-key.jks"
-            ./gradlew assembleNightly \
-              -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/signing-key.jks \
-              -Pandroid.injected.signing.store.password=${{ secrets.PASSWORD }} \
-              -Pandroid.injected.signing.key.alias=key0 \
-              -Pandroid.injected.signing.key.password=${{ secrets.PASSWORD }}
-          else
-            echo "No keystore provided — building without signing (unsigned APK)."
-            ./gradlew assembleNightly
+          echo "Building assembleNightly and assembleDebug (debug is signed with debug key)"
+          ./gradlew assembleNightly assembleDebug
+
+          # Prefer debug APK (installable), then prefer non-unsigned non-split APKs, then fall back to first APK.
+          apk_path=$(find app/build/outputs -type f -name "app-debug*.apk" | head -n 1 || true)
+          if [ -z "$apk_path" ]; then
+            apk_path=$(find app/build/outputs -type f -name "*.apk" ! -name "*-unsigned.apk" ! -name "*split-*.apk" | head -n 1 || true)
+          fi
+          if [ -z "$apk_path" ]; then
+            apk_path=$(find app/build/outputs -type f -name "*.apk" | head -n 1 || true)
           fi
 
-          # Find the first APK produced and copy it to a stable path used by later steps.
-          apk_path=$(find app/build/outputs -type f -name "*.apk" | head -n 1 || true)
           if [ -z "$apk_path" ]; then
             echo "ERROR: no APK found under app/build/outputs"
             exit 2
           fi
-          echo "Found APK: $apk_path"
+
+          echo "Found APK to upload: $apk_path"
           mkdir -p app/build
           cp "$apk_path" "app/build/${{ env.VERSION }}.apk"
 
