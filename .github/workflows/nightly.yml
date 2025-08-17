@@ -25,25 +25,42 @@ jobs:
           java-version: 17
           cache: 'gradle'
 
-      - name: Cook KeyStore
-        run: echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > $GITHUB_WORKSPACE/signing-key.jks
-
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Build with Gradle
+      - name: Build with Gradle (sign if keystore present)
+        shell: bash
         run: |
-          ./gradlew assembleNightly \
-          -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/signing-key.jks \
-          -Pandroid.injected.signing.store.password=${{ secrets.PASSWORD }} \
-          -Pandroid.injected.signing.key.alias=key0 \
-          -Pandroid.injected.signing.key.password=${{ secrets.PASSWORD }}
-          cp app/build/outputs/apk/nightly/app-nightly.apk app/build/${{ env.VERSION }}.apk
+          set -euo pipefail
+
+          # If a base64 keystore secret exists, decode it and build with signing properties.
+          if [ -n "${{ secrets.KEYSTORE_B64 }}" ]; then
+            echo "Decoding keystore from secrets and building with signing..."
+            echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > "$GITHUB_WORKSPACE/signing-key.jks"
+            ./gradlew assembleNightly \
+              -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/signing-key.jks \
+              -Pandroid.injected.signing.store.password=${{ secrets.PASSWORD }} \
+              -Pandroid.injected.signing.key.alias=key0 \
+              -Pandroid.injected.signing.key.password=${{ secrets.PASSWORD }}
+          else
+            echo "No keystore provided — building without signing (unsigned APK)."
+            ./gradlew assembleNightly
+          fi
+
+          # Find the first APK produced and copy it to a stable path used by later steps.
+          apk_path=$(find app/build/outputs -type f -name "*.apk" | head -n 1 || true)
+          if [ -z "$apk_path" ]; then
+            echo "ERROR: no APK found under app/build/outputs"
+            exit 2
+          fi
+          echo "Found APK: $apk_path"
+          mkdir -p app/build
+          cp "$apk_path" "app/build/${{ env.VERSION }}.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          path: app/build/outputs/apk/nightly/app-nightly.apk
+          path: app/build/${{ env.VERSION }}.apk
 
       - name: Upload APK to Discord
         shell: bash
